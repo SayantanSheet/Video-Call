@@ -2,12 +2,14 @@ import express from 'express';
 import {createServer} from "node:http";
 
 import {Server} from "socket.io";
-
 import mongoose from "mongoose";
 import { connectToSocket } from './controllers/socketManager.js';
 
 import cors from "cors";
+import dotenv from "dotenv";
 import userRoutes from "./routes/users.routes.js";
+
+dotenv.config();
 
 const app = express();
 const server = createServer(app);
@@ -22,7 +24,12 @@ app.use(express.urlencoded({ limit:"40kb", extended:true}));
 app.use("/api/v1/users", userRoutes);
 
 const start= async()=>{
-    const connectionDb = await mongoose.connect("REDACTED-ROTATED-CREDENTIAL");
+    const mongoUrl = process.env.MONGO_URL;
+    if (!mongoUrl) {
+        console.error("MONGO_URL not found in .env file");
+        process.exit(1);
+    }
+    const connectionDb = await mongoose.connect(mongoUrl);
     console.log("Connected to db");
     server.listen(app.get("port"),()=>{
         console.log("server started on port 8000");
