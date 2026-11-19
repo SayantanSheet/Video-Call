@@ -1,99 +1,102 @@
-
-import axios from "axios";
-import httpStatus from "http-status";
-import { createContext, useContext, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import server from "../environment";
+import client, {
+  clearStoredToken,
+  getStoredToken,
+  setStoredToken,
+} from "../lib/apiClient";
 
+export const AuthContext = createContext(null);
 
-export const AuthContext = createContext({});
-
-const client = axios.create({
-    baseURL: `${server}/api/v1/users`
-})
-
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error("useAuth must be used inside an AuthProvider");
+  }
+  return context;
+};
 
 export const AuthProvider = ({ children }) => {
+  const navigate = useNavigate();
+  const [user, setUser] = useState(null);
+  // Starts true so route guards can wait instead of flashing protected UI
+  // before the stored token has been checked.
+  const [isLoading, setIsLoading] = useState(true);
 
-    const authContext = useContext(AuthContext);
+  /** Validates any stored token against the server once on mount. */
+  useEffect(() => {
+    let cancelled = false;
 
+    const restoreSession = async () => {
+      if (!getStoredToken()) {
+        if (!cancelled) setIsLoading(false);
+        return;
+      }
 
-    const [userData, setUserData] = useState(authContext);
+      try {
+        const { data } = await client.get("/users/me");
+        if (!cancelled) setUser(data.user);
+      } catch {
+        // The response interceptor already cleared an invalid token.
+        if (!cancelled) setUser(null);
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    };
 
+    restoreSession();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-    const router = useNavigate();
+  const handleRegister = useCallback(async (name, username, password) => {
+    const { data } = await client.post("/users/register", { name, username, password });
+    setStoredToken(data.token);
+    setUser(data.user);
+    return data.user;
+  }, []);
 
-    const handleRegister = async (name, username, password) => {
-        try {
-            let request = await client.post("/register", {
-                name: name,
-                username: username,
-                password: password
-            })
+  const handleLogin = useCallback(async (username, password) => {
+    const { data } = await client.post("/users/login", { username, password });
+    setStoredToken(data.token);
+    setUser(data.user);
+    return data.user;
+  }, []);
 
+  const logout = useCallback(() => {
+    clearStoredToken();
+    setUser(null);
+    navigate("/signin", { replace: true });
+  }, [navigate]);
 
-            if (request.status === httpStatus.CREATED) {
-                return request.data.message;
-            }
-        } catch (err) {
-            throw err;
-        }
-    }
+  const getHistoryOfUser = useCallback(async () => {
+    const { data } = await client.get("/users/get_all_activity");
+    // The old backend could return an error object with HTTP 200; callers
+    // rendered it as a list and broke. Guarantee an array.
+    return Array.isArray(data) ? data : [];
+  }, []);
 
-    const handleLogin = async (username, password) => {
-        try {
-            let request = await client.post("/login", {
-                username: username,
-                password: password
-            });
+  const addToUserHistory = useCallback(async (meetingCode) => {
+    const { data } = await client.post("/users/add_to_activity", {
+      meeting_code: meetingCode,
+    });
+    return data;
+  }, []);
 
-            console.log(username, password)
-            console.log(request.data)
+  const value = useMemo(
+    () => ({
+      user,
+      isLoading,
+      isAuthenticated: Boolean(user),
+      handleRegister,
+      handleLogin,
+      logout,
+      getHistoryOfUser,
+      addToUserHistory,
+    }),
+    [user, isLoading, handleRegister, handleLogin, logout, getHistoryOfUser, addToUserHistory]
+  );
 
-            if (request.status === httpStatus.OK) {
-                localStorage.setItem("token", request.data.token);
-                router("/home")
-            }
-        } catch (err) {
-            throw err;
-        }
-    }
-
-    const getHistoryOfUser = async () => {
-        try {
-            let request = await client.get("/get_all_activity", {
-                params: {
-                    token: localStorage.getItem("token")
-                }
-            });
-            return request.data
-        } catch
-         (err) {
-            throw err;
-        }
-    }
-
-    const addToUserHistory = async (meetingCode) => {
-        try {
-            let request = await client.post("/add_to_activity", {
-                token: localStorage.getItem("token"),
-                meeting_code: meetingCode
-            });
-            return request
-        } catch (e) {
-            throw e;
-        }
-    }
-
-
-    const data = {
-        userData, setUserData, addToUserHistory, getHistoryOfUser, handleRegister, handleLogin
-    }
-
-    return (
-        <AuthContext.Provider value={data}>
-            {children}
-        </AuthContext.Provider>
-    )
-
-}
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+};

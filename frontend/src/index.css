@@ -1,20 +1,49 @@
-*{
+/*
+ * Design tokens. Kept in sync with `palette` in src/theme.js — MUI components
+ * read the theme, the meeting room's CSS module reads these.
+ */
+:root {
+  --surface-0: #0f1115;
+  --surface-1: #171a21;
+  --surface-2: #1e222b;
+  --border: 1px solid rgba(255, 255, 255, 0.08);
+  --accent: #6366f1;
+  --accent-soft: rgba(99, 102, 241, 0.16);
+  --text-hi: #e8eaed;
+  --text-lo: #9aa0a6;
+  --danger: #ef4444;
+  --radius: 16px;
+}
+
+* {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
 }
 
+html,
+body,
+#root {
+  height: 100%;
+}
 
 body {
-  margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
+  background: var(--surface-0);
+  color: var(--text-hi);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
 code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
-    monospace;
+  font-family: source-code-pro, Menlo, Monaco, Consolas, "Courier New", monospace;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

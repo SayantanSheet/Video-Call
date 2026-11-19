@@ -1,60 +1,215 @@
-.meetVideoContainer {
-    position: relative;
-    height: 100vh;
-    background: rgb(1, 2, 29);
- 
+/*
+ * Meeting-room layout. Tokens come from :root in index.css so this file and the
+ * MUI theme stay in agreement.
+ *
+ * Replaces the previous stylesheet, where .conferenceView was a non-wrapping
+ * flex row of min-width:30vw videos (3+ participants ran off screen),
+ * .meetUserVideo declared `bottom` twice, .buttonContainer was 100vw wide
+ * (forcing a horizontal scrollbar), and .chattingDisplay was referenced by the
+ * JSX but never defined, so chat had no scroll container.
+ */
+
+.meetRoot {
+  /* dvh, not vh: mobile browser chrome otherwise pushes the controls off screen */
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--surface-0);
+  color: var(--text-hi);
+  display: flex;
+  flex-direction: column;
+  /* Width the chat drawer occupies, so the grid and controls can make room for
+     it rather than sliding underneath. */
+  --chat-width: 0px;
 }
 
-.meetUserVideo {
-    bottom: 0;
-    position: absolute;
-    bottom: 10vh;
-    height: 20vh;
-    width:auto;
-    left: 0;
+@media (min-width: 900px) {
+  .meetRoot[data-chat-open="true"] {
+    --chat-width: 360px;
+  }
+}
+
+.meetHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  flex: none;
+}
+
+.roomCode {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  color: var(--text-lo);
+}
+
+/* min-height:0 is required, or the grid refuses to shrink inside the flex column */
+.videoGrid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  gap: 12px;
+  padding: 12px calc(12px + var(--chat-width)) calc(104px + env(safe-area-inset-bottom)) 12px;
+  grid-auto-rows: 1fr;
+  place-content: center;
+  /* Tiles are aspect-ratio constrained, so without this they sit at the top of
+     their row instead of centring in the available space. */
+  align-items: center;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  transition: padding-right 225ms ease;
+}
+
+@media (min-width: 769px) {
+  .videoGrid[data-count="1"] {
+    grid-template-columns: minmax(0, min(100%, 1100px));
+  }
+
+  .videoGrid[data-count="2"] {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .videoGrid[data-count="3"],
+  .videoGrid[data-count="4"] {
+    grid-template-columns: repeat(2, 1fr);
+    grid-template-rows: repeat(2, 1fr);
+  }
+
+  .videoGrid[data-count="5"],
+  .videoGrid[data-count="6"] {
+    grid-template-columns: repeat(3, 1fr);
+    grid-template-rows: repeat(2, 1fr);
+  }
+
+  .videoGrid[data-count="many"] {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    grid-auto-rows: minmax(160px, 1fr);
+    overflow-y: auto;
+  }
+}
+
+.tile {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: var(--radius);
+  background: #000;
+  border: var(--border);
+}
+
+.tile video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Mirror your own camera, but never a screen share — text would read backwards. */
+.tileSelf video {
+  transform: scaleX(-1);
+}
+
+.tileSelf.isSharing video {
+  transform: none;
+  object-fit: contain;
+}
+
+.tileLabel {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.4;
+  background: rgba(15, 17, 21, 0.68);
+  backdrop-filter: blur(8px);
+  color: var(--text-hi);
+  max-width: calc(100% - 20px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tileAvatar {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: var(--surface-2);
+  font-size: clamp(24px, 6vw, 44px);
+  font-weight: 600;
+  color: var(--text-lo);
+}
+
+.tileOverlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(15, 17, 21, 0.72);
+  font-size: 13px;
+  color: var(--text-lo);
+}
+
+.controlBar {
+  position: fixed;
+  /* Stays centred on the visible video area, not the whole window. */
+  left: calc(50% - var(--chat-width) / 2);
+  bottom: calc(20px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  transition: left 225ms ease;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: rgba(23, 26, 33, 0.86);
+  backdrop-filter: blur(14px) saturate(140%);
+  border: var(--border);
+  border-radius: 999px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+}
+
+/* The scroll container the old JSX referenced but never had. */
+.chatScroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+@media (max-width: 768px) {
+  .videoGrid {
+    gap: 8px;
+    padding: 8px 8px calc(96px + env(safe-area-inset-bottom));
+    grid-template-columns: 1fr;
+    grid-auto-rows: minmax(160px, 1fr);
+    overflow-y: auto;
+  }
+
+  .videoGrid[data-count="3"],
+  .videoGrid[data-count="4"],
+  .videoGrid[data-count="5"],
+  .videoGrid[data-count="6"],
+  .videoGrid[data-count="many"] {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .controlBar {
+    left: 8px;
+    right: 8px;
+    transform: none;
+    justify-content: space-around;
     border-radius: 20px;
-}
-
-.buttonContainer {
-    position:absolute;
-    width: 100vw;
-    bottom: 0;
-    text-align: center;
-}
-
-.buttonContainer svg {
-    font-size: 2.5rem;
-} 
-.conferenceView {
-    display: flex;
-    padding: 10px;
-    gap:10px;
-}
-
-.conferenceView  video {
-    width: 40vw;
-    height: 20vh;
-    min-width: 30vw;
-    border-radius: 10px;
-}
-
-.chatRoom {
-    position: absolute;
-    height: 90vh;
-    width: 30vw;
-    right: 0;
-    background: white;
-    border-radius: 10px;
-    bottom: 10vh;
-    /* padding-inline: 20px; */
-}
-
-.chatContainer{
-    position:relative;
-    height: 100%;
-}
-
-.chattingArea {
-    position: absolute;
-    bottom: 0;
+    padding: 10px 8px;
+    gap: 4px;
+  }
 }
