@@ -1,87 +1,113 @@
 # Apna Video Call
 
-A full-stack MERN (MongoDB, Express, React, Node.js) application for high-quality video conferencing and real-time chat. This project leverages **WebRTC** for peer-to-peer video streaming and **Socket.io** for real-time signaling and communication.
+A full-stack MERN application for video conferencing and real-time chat. Uses **WebRTC**
+for peer-to-peer media and **Socket.io** for signaling.
 
 ## 🚀 Features
-- **Real-time Video Calling**: High-quality P2P video and audio.
-- **Screen Sharing**: Present your screen to participants instantly.
-- **Instant Chat**: Send and receive messages during the call.
-- **Meeting Rooms**: Join specific rooms via unique URLs.
-- **Dynamic UI**: Responsive design with real-time participant updates.
+- **Real-time video calling** — P2P audio and video, full mesh.
+- **Screen sharing** — swapped in with `replaceTrack`, no reconnect.
+- **In-call chat** — with unread badges and message history for late joiners.
+- **Meeting rooms** — share a link; codes are generated with `crypto.getRandomValues`.
+- **Meeting history** — per-account, behind JWT auth.
+- **Responsive dark UI** — adapts from one participant to many, and to mobile.
 
 ## 🛠️ Tech Stack
-- **Frontend**: React.js, Material UI, Socket.io-client.
-- **Backend**: Node.js, Express, Socket.io.
-- **Database**: MongoDB (for meeting history and user data).
-- **Communication**: WebRTC (P2P), STUN Servers.
+- **Frontend**: React 19 (CRA), MUI v7, socket.io-client, axios.
+- **Backend**: Node.js (ESM), Express, Socket.io, Mongoose, JWT, helmet.
+- **Database**: MongoDB — users and meeting history.
+- **Media**: WebRTC with STUN; TURN optional (see below).
 
 ---
 
-## 📽️ How Video Calling Works (Step-by-Step)
+## 📽️ How a call is established
 
-The video call follows a structured process to establish a secure P2P connection:
-
-1.  **Permissions**: The app requests access to your camera and microphone.
-2.  **Joining a Room**: You enter a username and join a room (identified by the URL).
-3.  **Signaling**: The server introduces you to other participants in the room. This involves exchanging **SDP Offers/Answers** and **ICE Candidates** via Socket.io.
-4.  **Handshake**: Once the "handshake" is complete, a direct Peer-to-Peer connection is established between browsers.
-5.  **Streaming**: Video and Audio start flowing directly between participants without passing through the server.
-6.  **Interactions**: You can mute, toggle video, or share your screen. Each action is signaled to others in real-time.
+1. **Lobby** — the app requests camera and microphone access once, degrading to
+   audio-only or video-only if a device is unavailable, and lets you preview and
+   set your name before joining.
+2. **Join** — the client emits `join-call` with the room id and username; the
+   server puts the socket in a Socket.io room and replies with the member list.
+3. **Signaling** — each pair exchanges SDP offers/answers and ICE candidates over
+   the `signal` event. Simultaneous offers are resolved with
+   [perfect negotiation](https://w3c.github.io/webrtc-pc/#perfect-negotiation-example),
+   so two peers offering at once doesn't wedge the connection.
+4. **Streaming** — media flows directly between browsers. The server never sees it.
+5. **Leaving** — the socket disconnects, the server broadcasts `user-left`, and
+   each peer closes its connection and drops the tile.
 
 > [!TIP]
-> For a deep dive into the technical implementation details (WebRTC logic, socket events, etc.), please refer to our **[Video Call Logic Documentation](./VIDEO_CALL_LOGIC.md)**.
+> Technical detail lives in **[VIDEO_CALL_LOGIC.md](./VIDEO_CALL_LOGIC.md)**.
 
 ---
 
-## ⚙️ Installation & Setup
+## ⚙️ Setup
 
 ### Prerequisites
-- Node.js installed
-- MongoDB database (Local or Atlas)
+- Node.js 18 or newer
+- MongoDB (local or Atlas)
 
-### 1. Clone the repository
+### 1. Clone
 ```bash
-git clone https://github.com/your-username/ApnaVideoCall.git
-cd ApnaVideoCall
+git clone https://github.com/SayantanSheet/Video-Call.git
+cd Video-Call
 ```
 
-### 2. Backend Setup
-1. Navigate to the backend folder:
-   ```bash
-   cd backend
-   ```
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-3. Create a `.env` file and add your configuration:
-   ```env
-   PORT=8000
-   MONGO_URL=your_mongodb_connection_string
-   ```
-4. Start the server:
-   ```bash
-   npm start
-   ```
+### 2. Backend
+```bash
+cd backend
+npm install
+cp .env.example .env     # then fill it in
+npm run dev
+```
 
-### 3. Frontend Setup
-1. Open a new terminal and navigate to the frontend folder:
-   ```bash
-   cd frontend
-   ```
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-3. Start the React app:
-   ```bash
-   npm start
-   ```
+`.env` values — see `backend/.env.example` for the full list:
+
+| Variable | Required | Notes |
+|---|---|---|
+| `MONGO_URL` | yes | MongoDB connection string |
+| `JWT_SECRET` | in production | `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"` |
+| `CORS_ORIGIN` | in production | Comma-separated allowlist, e.g. `https://your-frontend.onrender.com` |
+| `PORT` | no | Defaults to 8000; Render injects this |
+| `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL` | no | See *Connectivity* below |
+
+> **Never commit `.env`.** It is gitignored. If a credential is ever committed,
+> rotate it — removing the file in a later commit does not remove it from history.
+
+### 3. Frontend
+```bash
+cd frontend
+npm install
+cp .env.example .env.local   # defaults to http://localhost:8000
+npm start
+```
+
+### 4. Verify
+```bash
+cd backend  && npm test   # API and auth smoke tests
+cd frontend && npm test   # unit tests
+curl localhost:8000/health
+```
 
 ---
 
+## 🌐 Connectivity and limits
+
+- **TURN.** Only STUN is configured by default, which covers most home networks
+  but fails behind symmetric NAT, mobile carrier CGNAT, and strict corporate
+  firewalls. Set `TURN_*` in the backend `.env` to fix that — any provider works
+  (coturn, Metered, Twilio, Cloudflare). The client fetches ICE config from
+  `GET /api/v1/ice`, deliberately **not** from `REACT_APP_*`, because CRA inlines
+  those into the public bundle where anyone could read the credentials.
+- **Mesh size.** Every participant connects to every other, so each uplink
+  encodes n−1 streams. Practical ceiling is roughly 4–6 on a desktop and fewer on
+  a phone. Beyond that needs an SFU.
+- **Secure context.** `getUserMedia` only works over HTTPS or on `localhost`.
+  Testing from a phone against `http://192.168.x.x:3000` will always fail.
+- **Single instance.** Room state is in-process. Running more than one backend
+  instance requires the Socket.io Redis adapter, or participants on different
+  instances won't see each other.
+
 ## 🤝 Contributing
-Contributions are welcome! Feel free to open an issue or submit a pull request.
+Contributions are welcome — open an issue or a pull request.
 
 ## 📄 License
-This project is licensed under the MIT License.
+MIT.

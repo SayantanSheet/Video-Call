@@ -1,89 +1,139 @@
 # Video Call Implementation Logic
 
-This document provides a technical explanation of how the video call functionality is implemented in the **ApnaVideoCall** project using WebRTC and Socket.io.
+Technical explanation of how video calling works in **Apna Video Call**, using WebRTC
+and Socket.io.
 
 ## Technology Stack
-- **WebRTC**: Used for Peer-to-Peer (P2P) audio and video streaming.
-- **Socket.io**: Acts as the signaling server to coordinate connections between peers.
-- **MediaDevices API**: Used to capture camera and microphone streams.
+- **WebRTC** — peer-to-peer audio and video.
+- **Socket.io** — signaling server coordinating connections between peers.
+- **MediaDevices API** — camera, microphone, and screen capture.
+
+## Where the code lives
+
+| Concern | File |
+|---|---|
+| Page composition | `frontend/src/pages/VideoMeet.jsx` |
+| Peer mesh + socket | `frontend/src/hooks/useWebRTC.js` |
+| Camera, mic, screen | `frontend/src/hooks/useLocalMedia.js` |
+| UI | `frontend/src/components/meet/` |
+| Signaling server | `backend/src/controllers/socketManager.js` |
 
 ---
 
-## Step-by-Step Workflow
+## Step-by-step workflow
 
-### 1. Media Acquisition & Lobby
-Before joining a call, the application prepares the user's environment:
-- **Permissions**: Calls `navigator.mediaDevices.getUserMedia({ video: true, audio: true })`.
-- **Local Stream**: Stores the resulting `MediaStream` in `window.localStream`.
-- **Local Preview**: Attaches the stream to a muted `<video>` element so the user can see themselves.
+### 1. Media acquisition and lobby
 
-### 2. Signaling Server Connection
-When the user clicks "Connect":
-- **Socket Initialization**: The client connects to the server (`io.connect(server_url)`).
-- **Joining a Room**: Emits a `join-call` event with the current URL as the `roomID`.
-- **Server-Side**: The `socketManager.js` in the backend adds the user's socket ID to a list associated with that `roomID`.
+`useLocalMedia` makes a **single** `getUserMedia` call for camera and microphone. If it
+fails, it falls back to audio-only, then video-only, and finally reports a reason
+derived from the `DOMException` name — `NotAllowedError` (blocked), `NotFoundError`
+(no device), `NotReadableError` (in use elsewhere). A user with no working camera can
+still join and receive.
 
-### 3. The WebRTC Handshake (Signaling)
-Direct P2P connections cannot be established without an initial "handshake" mediated by the server.
+The stream is held in a ref and exposed as state. Each `<video>` element attaches it in
+its own effect, so there is no shared ref pointing at two elements.
 
-#### A. User Discovery
-When a new user joins, the server emits `user-joined` to everyone already in the room with the new user's socket ID.
+### 2. Connecting to the signaling server
 
-#### B. The SDP Offer
-Existing participants:
-1. Create a new `RTCPeerConnection` for the newcomer.
-2. Add their `localStream` to this connection.
-3. Call `peerConnection.createOffer()` to generate a Session Description (SDP).
-4. Set it as `LocalDescription`.
-5. Send this offer to the newcomer via the socket `signal` event.
+On Join, `useWebRTC` opens the socket and emits `join-call` with the **room id from the
+route** (`useParams().roomId`) and the username. Using the route param rather than
+`window.location.href` means query strings and hash fragments can't fork a room.
 
-#### C. The SDP Answer
-The newcomer:
-1. Receives the `signal` containing the offer.
-2. Creates an `RTCPeerConnection` for the sender.
-3. Sets the received offer as `RemoteDescription`.
-4. Calls `peerConnection.createAnswer()`.
-5. Sets it as `LocalDescription`.
-6. Sends the answer back to the sender via the socket `signal` event.
+Server-side, the socket joins a real Socket.io room. All listeners are registered once
+per connection, at connection scope.
 
-#### D. ICE Candidates (The Network Path)
-As soon as the peer connections are created:
-1. Both browsers start gathering **ICE Candidates** (IPs and Ports) using STUN servers.
-2. Each time a candidate is found, it's sent via the `signal` event.
-3. The receiving end adds the candidate using `peerConnection.addIceCandidate()`.
+### 3. The WebRTC handshake
 
-### 4. Establishing the Stream
-Once the handshake is complete:
-- The `onaddstream` event (or `ontrack`) fires on the `RTCPeerConnection`.
-- The remote `MediaStream` is extracted and added to the application state (`videos` array).
-- React renders a new `<video>` component for each remote stream.
+#### A. Discovery
+The server emits `user-joined(socketId, memberIds, participants)` to the whole room.
+Each client calls `ensurePeer` for every member it doesn't already have a connection
+to. `ensurePeer` is **idempotent** — it returns the existing connection rather than
+replacing it.
 
-### 5. Interaction Features
+#### B. Perfect negotiation
+In a full mesh, both peers can offer simultaneously. Rather than picking a "caller",
+each pair derives politeness from a total order over socket ids:
 
-#### Mute/Unmute
-- Controlled by toggling the `enabled` property of the tracks in `window.localStream`.
-- `localStream.getAudioTracks()[0].enabled = !audioEnabled;`
+```js
+const polite = mySocketId > peerId;
+```
 
-#### Screen Sharing
-- Calls `navigator.mediaDevices.getDisplayMedia()`.
-- Replaces the video track in all active `RTCPeerConnection` instances with the screen track.
-- Triggers a renegotiation (new offer/answer) if necessary.
+For any pair exactly one side is polite, agreed without extra signaling.
 
-### 6. Disconnection & Cleanup
-When a user leaves:
-1. **Track Termination**: All media tracks are stopped (`track.stop()`).
-2. **Socket Disconnect**: The socket connection is closed.
-3. **Broadcasting Exit**: The server detects the disconnect and emits `user-left` to the room.
-4. **Cleanup**: Other clients remove the leaving user's socket ID from their `connections` object and update the UI.
+- **Offering**: `onnegotiationneeded` → `setLocalDescription()` (implicit offer) →
+  emit `{ sdp }`.
+- **Receiving an offer during a collision**: the impolite peer ignores it; the polite
+  peer rolls back implicitly inside `setRemoteDescription` and answers.
+- **Answering**: `setRemoteDescription(offer)` → `setLocalDescription()` (implicit
+  answer) → emit `{ sdp }`.
+
+#### C. ICE candidates
+Emitted as `{ ice }` over the same `signal` event. Candidates that arrive before the
+remote description is set are **buffered** and flushed afterwards, rather than thrown
+away.
+
+#### D. Receive-only transceivers
+A peer without a camera or microphone adds
+`addTransceiver(kind, { direction: "recvonly" })` so both media sections are still
+negotiated and they can receive the other side.
+
+### 4. Receiving media
+
+`ontrack` fires per track. Audio and video arrive as separate events, so each peer keeps
+one stable `MediaStream` — reassigning `srcObject` would restart playback in Chrome.
+
+Track `mute`/`unmute` events drive the avatar fallback and the mic-off badge. These are
+handled as **events only**; reading `track.muted` on arrival would report muted before
+the first frame and flash a false badge on every join.
+
+### 5. Interaction
+
+#### Mute / camera
+Toggles `track.enabled`, then reads the value back off the track:
+
+```js
+track.enabled = !track.enabled;
+setAudioEnabled(track.enabled);
+```
+
+No hardware re-acquisition, and the icon cannot disagree with the device.
+
+#### Screen sharing
+`getDisplayMedia()` produces a track that becomes the *outgoing* video track. A single
+effect calls `RTCRtpSender.replaceTrack` on every peer. `replaceTrack` needs no
+renegotiation, so sharing doesn't interrupt the call or create offer collisions. The
+browser's own "Stop sharing" banner is handled via the track's `ended` event.
+
+### 6. Disconnection and cleanup
+
+On leave or unmount:
+1. Each `RTCPeerConnection` has its handlers detached, then `close()`.
+2. The socket is disconnected — this is what the server uses to broadcast `user-left`.
+3. Local tracks are stopped by `useLocalMedia`, which also listens for `pagehide`.
+
+Peer state lives in a `useRef`-held `Map`, so it is discarded with the component rather
+than surviving a remount.
+
+> **Note:** peer teardown deliberately does *not* stop sender tracks. Senders carry the
+> shared local camera and microphone tracks; stopping them when one participant leaves
+> would kill the local camera for everyone still in the call.
 
 ---
 
-## Signaling Event Reference
+## Signaling event reference
 
-| Event Name | Sender | Receiver | Description |
+| Event | Sender | Receiver | Payload |
 | :--- | :--- | :--- | :--- |
-| `join-call` | Client | Server | Tells server to add user to a specific room. |
-| `user-joined`| Server | Room Clients | Notifies existing users about a new participant. |
-| `signal` | Client | Client (via Server) | Relays SDP Offers/Answers and ICE Candidates. |
-| `chat-message`| Client | Room Clients | Broadcasts text messages to the meeting. |
-| `user-left` | Server | Room Clients | Notifies others that a user has disconnected. |
+| `join-call` | Client | Server | `(roomId, username)` |
+| `user-joined` | Server | Room | `(socketId, memberIds, participants)` |
+| `signal` | Client | Client (relayed) | `(targetId, JSON)` — `{sdp}`, `{ice}`, or `{meta}` |
+| `chat-message` | Client → Server → Room | | `(text)` out, `(text, sender, senderSocketId)` back |
+| `user-left` | Server | Room | `(socketId)` |
+
+### Server-side guarantees
+
+- `signal` is relayed only to a socket **in the sender's own room**.
+- Chat sender names come from the socket, not the payload, so they can't be spoofed.
+- Chat history is capped per room and deleted when the last participant leaves.
+- Re-emitting `join-call` for the same room is a no-op, so listeners are never
+  duplicated.
