@@ -1,27 +1,30 @@
-import { useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { Navigate, useLocation } from "react-router-dom";
+import { useAuth } from "../contexts/AuthContext";
+import FullPageLoader from "../components/FullPageLoader";
 
-const withAuth = (WrappedComponent) => {
-    const AuthComponent = (props) => {
-     const router = useNavigate();
+/**
+ * Route guard.
+ *
+ * The previous version checked only that a token string existed in
+ * localStorage, rendered the protected component while redirecting (a flash of
+ * private UI), and sent users to /auth — a route that was commented out, so they
+ * landed in the /:url catch-all and ended up inside a video room called "auth".
+ */
+const RequireAuth = ({ children }) => {
+  const { isAuthenticated, isLoading } = useAuth();
+  const location = useLocation();
 
-     const isAuthenticated = () => {
-        if(localStorage.getItem("token")) {
-            return true;
-        }
-        return false;
-     }
+  // Wait for the stored token to be validated before deciding.
+  if (isLoading) {
+    return <FullPageLoader label="Checking your session…" />;
+  }
 
-     useEffect (()=>{
-        if(!isAuthenticated()) {
-            router("/auth");
-        }
-     },[])
+  if (!isAuthenticated) {
+    // Remember where they were headed so sign-in can send them back.
+    return <Navigate to="/signin" replace state={{ from: location.pathname }} />;
+  }
 
-     return <WrappedComponent {...props} />;
-    };
+  return children;
+};
 
-    return AuthComponent;
-}
-
-export default withAuth;
+export default RequireAuth;

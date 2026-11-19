@@ -1,90 +1,127 @@
-// SignUp.js
-import React, { useState, useContext } from 'react';
-import { Avatar, Button, CssBaseline, TextField, Box, Typography, Grid, Snackbar } from '@mui/material';
-import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
-import { createTheme, ThemeProvider } from '@mui/material/styles';
-import { AuthContext } from '../contexts/AuthContext';
-import { useNavigate, Link } from 'react-router-dom';
+import { useState } from "react";
+import { Link as RouterLink, useNavigate } from "react-router-dom";
+import Alert from "@mui/material/Alert";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import Link from "@mui/material/Link";
+import Stack from "@mui/material/Stack";
+import TextField from "@mui/material/TextField";
 
-const defaultTheme = createTheme();
+import AuthLayout from "../components/AuthLayout";
+import { useAuth } from "../contexts/AuthContext";
+import { toErrorMessage } from "../lib/apiClient";
 
-export default function SignUp() {
-  const [name, setName] = useState('');
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
-  const [open, setOpen] = useState(false);
+const MIN_PASSWORD_LENGTH = 8;
+const MIN_USERNAME_LENGTH = 3;
 
-  const { handleRegister } = useContext(AuthContext);
+const SignUp = () => {
+  const { handleRegister } = useAuth();
   const navigate = useNavigate();
 
-  const handleAuth = async () => {
+  const [form, setForm] = useState({ name: "", username: "", password: "" });
+  const [error, setError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const updateField = (field) => (event) =>
+    setForm((previous) => ({ ...previous, [field]: event.target.value }));
+
+  // Mirrors the server's rules so users get feedback before a round trip.
+  const usernameError =
+    form.username && form.username.trim().length < MIN_USERNAME_LENGTH
+      ? `At least ${MIN_USERNAME_LENGTH} characters`
+      : "";
+  const passwordError =
+    form.password && form.password.length < MIN_PASSWORD_LENGTH
+      ? `At least ${MIN_PASSWORD_LENGTH} characters`
+      : "";
+
+  const isValid =
+    form.name.trim() &&
+    form.username.trim().length >= MIN_USERNAME_LENGTH &&
+    form.password.length >= MIN_PASSWORD_LENGTH;
+
+  const onSubmit = async (event) => {
+    event.preventDefault();
+    setError("");
+    setIsSubmitting(true);
+
     try {
-      const res = await handleRegister(name, username, password);
-      setMessage(res);
-      setOpen(true);
-      setError('');
-      setTimeout(() => navigate('/signin'), 3000);
+      await handleRegister(form.name, form.username, form.password);
+      // Registration signs the user in, so go straight to the dashboard
+      // instead of the old setTimeout-then-redirect-to-sign-in dance.
+      navigate("/home", { replace: true });
     } catch (err) {
-      setError(err?.response?.data?.message || 'Registration failed');
+      setError(toErrorMessage(err, "Could not create your account"));
+      setIsSubmitting(false);
     }
   };
 
   return (
-    <div className='landingPageContainer'>
-      <Grid container component="main" sx={{ height: '100vh',display:'flex',justifyContent:'center',alignItems:'center',px:2 }} >
-        <CssBaseline />
-        <Grid item xs={12} sm={8} md={5}>
-          <Box sx={{ my: 8, mx: 4, display: 'flex', flexDirection: 'column', alignItems: 'center', border: '2px solid #1976d2', borderRadius: 2, p: 4, boxShadow: 3, backgroundColor: 'white' }}>
-            <Avatar sx={{ m: 1, bgcolor: 'secondary.main' }}>
-              <LockOutlinedIcon />
-            </Avatar>
-            <Typography component="h1" variant="h5">Sign Up</Typography>
-            <Box component="form" noValidate sx={{ mt: 1 }}>
-              <TextField
-                margin="normal"
-                required
-                fullWidth
-                label="Full Name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-              <TextField
-                margin="normal"
-                required
-                fullWidth
-                label="Username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-              />
-              <TextField
-                margin="normal"
-                required
-                fullWidth
-                label="Password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-              {error && <p style={{ color: 'red' }}>{error}</p>}
-              <Button fullWidth variant="contained" sx={{ mt: 3, mb: 2 }} onClick={handleAuth}>
-                Register
-              </Button>
-              <Typography variant="body2"color='textSecondary'>
-                Already have an account? <Link to="/signin">Sign In</Link>
-              </Typography>
-            </Box>
-          </Box>
-        </Grid>
-      </Grid>
+    <AuthLayout
+      title="Create your account"
+      subtitle="It takes a few seconds and it's free."
+      footer={
+        <>
+          Already have an account?{" "}
+          <Link component={RouterLink} to="/signin" underline="hover">
+            Sign in
+          </Link>
+        </>
+      }
+    >
+      <Box component="form" onSubmit={onSubmit} noValidate>
+        <Stack spacing={2}>
+          {error && <Alert severity="error">{error}</Alert>}
 
-      <Snackbar
-        open={open}
-        autoHideDuration={4000}
-        message={message}
-        onClose={() => setOpen(false)}
-      />
-    </div>
+          <TextField
+            label="Full name"
+            name="name"
+            autoComplete="name"
+            autoFocus
+            required
+            fullWidth
+            value={form.name}
+            onChange={updateField("name")}
+          />
+
+          <TextField
+            label="Username"
+            name="username"
+            autoComplete="username"
+            required
+            fullWidth
+            value={form.username}
+            onChange={updateField("username")}
+            error={Boolean(usernameError)}
+            helperText={usernameError}
+          />
+
+          <TextField
+            label="Password"
+            name="password"
+            type="password"
+            autoComplete="new-password"
+            required
+            fullWidth
+            value={form.password}
+            onChange={updateField("password")}
+            error={Boolean(passwordError)}
+            helperText={passwordError || `At least ${MIN_PASSWORD_LENGTH} characters`}
+          />
+
+          <Button
+            type="submit"
+            variant="contained"
+            size="large"
+            fullWidth
+            disabled={isSubmitting || !isValid}
+          >
+            {isSubmitting ? "Creating account…" : "Create account"}
+          </Button>
+        </Stack>
+      </Box>
+    </AuthLayout>
   );
-}
+};
+
+export default SignUp;
