@@ -1,39 +1,60 @@
-import express from 'express';
-import {createServer} from "node:http";
-
-import {Server} from "socket.io";
+import express from "express";
 import mongoose from "mongoose";
-import { connectToSocket } from './controllers/socketManager.js';
-
 import cors from "cors";
-import dotenv from "dotenv";
+import helmet from "helmet";
+
+import { config, iceServers } from "./config/env.js";
 import userRoutes from "./routes/users.routes.js";
+import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 
-dotenv.config();
+/**
+ * Builds the Express app. Kept free of side effects — no listening, no database
+ * connection — so tests can exercise it with supertest. Startup lives in
+ * src/server.js.
+ */
+export const createApp = () => {
+  const app = express();
 
-const app = express();
-const server = createServer(app);
-const io = connectToSocket(server);
+  // Render and most PaaS front the app with a proxy; without this the rate
+  // limiter buckets every client under the proxy's IP.
+  app.set("trust proxy", 1);
 
-app.set("port",(process.env.PORT || 8000));
-//error handler for allow http requests or allow requests for any domain(cors)
-app.use(cors()); 
-app.use(express.json({ limit:"40kb"}));
-app.use(express.urlencoded({ limit:"40kb", extended:true}));
-
-app.use("/api/v1/users", userRoutes);
-
-const start= async()=>{
-    const mongoUrl = process.env.MONGO_URL;
-    if (!mongoUrl) {
-        console.error("MONGO_URL not found in .env file");
-        process.exit(1);
-    }
-    const connectionDb = await mongoose.connect(mongoUrl);
-    console.log("Connected to db");
-    server.listen(app.get("port"),()=>{
-        console.log("server started on port 8000");
+  app.use(helmet());
+  app.use(
+    cors({
+      // An explicit allowlist, replacing the previous bare `cors()` which sent
+      // Access-Control-Allow-Origin: * for the whole API.
+      origin: config.corsOrigins,
+      methods: ["GET", "POST", "OPTIONS"],
+      allowedHeaders: ["Content-Type", "Authorization"],
     })
-}
+  );
+  app.use(express.json({ limit: "40kb" }));
+  app.use(express.urlencoded({ limit: "40kb", extended: true }));
 
-start();
+  /** Reports real dependency state rather than just "the process is up". */
+  app.get("/health", (_req, res) => {
+    const dbReady = mongoose.connection.readyState === 1;
+    res.status(dbReady ? 200 : 503).json({
+      status: dbReady ? "ok" : "degraded",
+      database: dbReady ? "connected" : "disconnected",
+      uptime: Math.round(process.uptime()),
+    });
+  });
+
+  /**
+   * ICE configuration is served from here rather than baked into the frontend:
+   * CRA inlines every REACT_APP_* value into the public bundle, which would make
+   * TURN credentials world-readable.
+   */
+  app.get("/api/v1/ice", (_req, res) => {
+    res.json({ iceServers });
+  });
+
+  app.use("/api/v1/users", userRoutes);
+
+  app.use(notFoundHandler);
+  app.use(errorHandler);
+
+  return app;
+};

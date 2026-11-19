@@ -1,87 +1,79 @@
-import httpStatus from "http-status";
+import bcrypt from "bcrypt";
 import { User } from "../models/user.model.js";
-import bcrypt, { hash } from "bcrypt";
-import crypto from "crypto";
 import { Meeting } from "../models/meeting.model.js";
+import { signToken } from "../middleware/auth.js";
+import { ApiError, asyncHandler } from "../utils/ApiError.js";
+import { normalizeUsername, requireString, validatePassword } from "../utils/validate.js";
 
-const login = async (req,res)=>{
+const BCRYPT_ROUNDS = 10;
 
-    const {username, password} = req.body;
-    if(!username || !password) {
-        return res.status(400).json({message: "Please Provide"})
-    }
+const toPublicUser = (user) => ({
+  id: user._id.toString(),
+  name: user.name,
+  username: user.username,
+});
 
-    try{
-        const user=await User.findOne({username});
-        if(!user){
-            return res.status(httpStatus.NOT_FOUND).json({message: "Invalid Credentials"})
-        }
+const register = asyncHandler(async (req, res) => {
+  const name = requireString(req.body?.name, "Name", { min: 1, max: 64 });
+  const username = normalizeUsername(req.body?.username);
+  const password = validatePassword(req.body?.password);
 
-        let isPasswordCorrect=await bcrypt.compare(password, user.password);
-        if(isPasswordCorrect) {
-            let token = crypto.randomBytes(20).toString("hex");
+  const existingUser = await User.findOne({ username });
+  if (existingUser) {
+    // 409, not the original 302 FOUND — that sent a redirect status with no Location.
+    throw new ApiError(409, "That username is already taken");
+  }
 
-            user.token=token;
-            await user.save();
-            return res.status(httpStatus.OK).json({token: token});
-        } else {
-            return res.status(httpStatus.UNAUTHORIZED).json({message: "Invalid Username or Password"});
-        }
-    }
-    catch(e){
-        return res.status(500).json({message: `something went wrong ${e}`})
-    }
-}
+  const user = await User.create({
+    name,
+    username,
+    password: await bcrypt.hash(password, BCRYPT_ROUNDS),
+  });
 
+  // Sign the user in directly so registration doesn't require a second round trip.
+  res.status(201).json({ token: signToken(user), user: toPublicUser(user) });
+});
 
-const register= async (req,res)=>{
-    const {name, username, password}= req.body;
+const login = asyncHandler(async (req, res) => {
+  const username = normalizeUsername(req.body?.username);
+  const password = requireString(req.body?.password, "Password", { max: 72 });
 
-    try {
-        const existingUser = await User.findOne({username});
-        if(existingUser){
-            return res.status(httpStatus.FOUND).json({message: "User already exists"});
-        }
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const newUser= new User({
-            name: name,
-            username: username,
-            password: hashedPassword
-        });
+  const user = await User.findOne({ username }).select("+password");
 
-        await newUser.save();
-        res.status(httpStatus.CREATED).json({message: "User Registered"})
-    } catch(e){
-        res.json({message:`Something went wrong ${e}`})
-    }
-}
+  // One generic message for both "no such user" and "wrong password". The
+  // original returned 404 vs 401 with different text, which let anyone probe
+  // for valid usernames.
+  const isPasswordCorrect = user ? await bcrypt.compare(password, user.password) : false;
+  if (!user || !isPasswordCorrect) {
+    throw new ApiError(401, "Invalid username or password");
+  }
 
-const getUserHistory = async (req, res)=>{
-    const {token}= req.query;
-    try {
-        const user = await User.findOne({token: token});
-        const meetings = await Meeting.find({user_id: user.username})
-        res.json(meetings)
-    } catch(e) {
-        res.json({message: `Something went wrong ${e}`})
-    }
-}
+  res.json({ token: signToken(user), user: toPublicUser(user) });
+});
 
-const addToHistory = async (req, res)=>{
-    const {token, meeting_code}= req.body;
-    try {
-        const user = await User.findOne ({token: token});
+const getCurrentUser = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.user.id);
+  if (!user) {
+    throw new ApiError(401, "Account no longer exists");
+  }
+  res.json({ user: toPublicUser(user) });
+});
 
-        const newMeeting = new Meeting({
-            user_id: user.username,
-            meetingCode: meeting_code
-        })
-        await newMeeting.save();
-        res.status(httpStatus.CREATED).json({message: "Meeting added to history"});
-    } catch(e) {
-        res.json({message: `Something went wrong ${e}`})
-    }
-}
+/** Identity comes from the verified token, never from the request. */
+const getUserHistory = asyncHandler(async (req, res) => {
+  const meetings = await Meeting.find({ user_id: req.user.id }).sort({ date: -1 }).limit(100);
+  res.json(meetings);
+});
 
-export {login, register, getUserHistory, addToHistory}
+const addToHistory = asyncHandler(async (req, res) => {
+  const meetingCode = requireString(req.body?.meeting_code, "Meeting code", { max: 64 });
 
+  const meeting = await Meeting.create({
+    user_id: req.user.id,
+    meetingCode,
+  });
+
+  res.status(201).json({ message: "Meeting added to history", meeting });
+});
+
+export { login, register, getCurrentUser, getUserHistory, addToHistory };
