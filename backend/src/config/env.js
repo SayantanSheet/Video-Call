@@ -50,7 +50,14 @@ const resolveCorsOrigins = () => {
   return raw
     .split(",")
     .map((origin) => origin.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((origin) => {
+      // Render's blueprint `fromService` injects a bare host, but the browser's
+      // Origin header always carries a scheme, so a bare host would never match.
+      if (/^https?:\/\//i.test(origin)) return origin.replace(/\/+$/, "");
+      const isLocal = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(origin);
+      return `${isLocal ? "http" : "https"}://${origin}`;
+    });
 };
 
 /** Optional TURN relay. Unset means STUN-only, which is fine on most home networks. */
